@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Job Matcher</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        body { background-color: #121212; color: #e0e0e0; }
+        .card { background-color: #1e1e1e; border: 1px solid #333; color: #fff; }
+        .form-control, .form-select { border: 1px solid #444; }
+        .form-control:focus, .form-select:focus { background-color: #2a2a2a; color: #fff; color-scheme: dark; }
+        .badge-skill { font-size: 0.8rem; margin-right: 4px; }
+        .job-date-text { color: #0dcaf0; }
+    </style>
+</head>
+<body class="py-3">
+
+<div class="container">
+    <!-- Top Bar -->
+    <nav class="d-flex justify-content-between align-items-center mb-4 pb-2 border-bottom border-secondary">
+        <h3 class="mb-0">AI Job Matcher</h3>
+        <div>
+            <button class="btn btn-outline-warning me-2" data-bs-toggle="modal" data-bs-target="#savedJobsModal">
+                <i class="bi bi-bookmark-fill"></i> Saved Jobs (<span id="saved-count">0</span>)
+            </button>
+            <button class="btn btn-outline-info" data-bs-toggle="modal" data-bs-target="#apiKeyModal">
+                <i class="bi bi-key-fill"></i> API Settings
+            </button>
+        </div>
+    </nav>
+
+    <!-- Error Message Alert -->
+    {% if error_message %}
+        <div class="alert alert-danger alert-dismissible fade show" role="alert">
+            {{ error_message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+    {% endif %}
+
+    <!-- Search Form -->
+    <div class="card p-4 mb-4">
+        <form method="post" enctype="multipart/form-data" id="jobForm">
+            {% csrf_token %}
+            <input type="hidden" name="gemini_key" id="hidden_gemini_key">
+            <input type="hidden" name="page" id="page_num" value="{{ current_page|default:1 }}">
+
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label">Upload Resume (PDF)</label>
+                    <input type="file" name="resume" class="form-control" {% if not has_resume %}required{% endif %}>
+                    {% if has_resume %}
+                        <small class="text-success mt-1 d-block"><i class="bi bi-check-circle"></i> Resume stored in session.</small>
+                    {% endif %}
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Search Query</label>
+                    <input type="text" name="search_query" class="form-control" value="{{ current_query }}" placeholder="e.g. Python, Django" required>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Location</label>
+                    <input type="text" name="location" class="form-control" value="{{ current_location|default:'Remote' }}" placeholder="e.g. Remote">
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary mt-3" onclick="resetPageToOne()">Search & Analyze Jobs</button>
+        </form>
+    </div>
+
+    <!-- Match Results -->
+    {% if categorized_results %}
+        <h3 class="mb-3">Categorized Results</h3>
+        {% for tier, jobs in categorized_results.items %}
+            {% if jobs %}
+                <h4 class="text-info mt-4">Tier {{ tier }}</h4>
+                <div class="row job-tier-group" id="tier-container-{{ forloop.counter }}">
+                    {% for job in jobs %}
+                        <div class="col-12 mb-3 job-item {% if forloop.counter > 5 %}d-none{% endif %}" data-tier="{{ forloop.parentloop.counter }}">
+                            <div class="card p-3">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div>
+                                        <h5 class="mb-1">{{ job.title }}</h5>
+                                        <small class="d-block text-light mt-1">
+                                            <strong>{{ job.company }}</strong> • {{ job.location }}
+                                            {% if job.date_posted %}
+                                                <span class="mx-1 text-secondary">|</span>
+                                                <span class="job-date-text">{{ job.date_posted }}</span>
+                                            {% endif %}
+                                        </small>
+                                    </div>
+                                    <div class="d-flex align-items-center">
+                                        <span class="badge bg-primary fs-6 me-2">{{ job.match_score }}% Match</span>
+                                        <button class="btn btn-sm btn-outline-warning bookmark-btn" 
+                                                data-title="{{ job.title }}"
+                                                data-company="{{ job.company }}"
+                                                data-link="{{ job.apply_link }}"
+                                                onclick="toggleSaveJobFromElement(this)">
+                                            <i class="bi bi-bookmark"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <hr class="border-secondary my-2">
+                                <p class="mb-2"><strong>AI Summary:</strong> {{ job.summary }}</p>
+                                
+                                <div class="mb-2">
+                                    <strong class="small d-block">Matched Skills:</strong>
+                                    {% for skill in job.matched_skills %}
+                                        <span class="badge bg-success badge-skill">{{ skill }}</span>
+                                    {% empty %}<small class="text-muted">None</small>{% endfor %}
+                                </div>
+
+                                <div class="mb-3">
+                                    <strong class="small d-block">Missing Skills:</strong>
+                                    {% for skill in job.missing_skills %}
+                                        <span class="badge bg-danger badge-skill">{{ skill }}</span>
+                                    {% empty %}<small class="text-muted">None</small>{% endfor %}
+                                </div>
+
+                                <div>
+                                    {% if job.apply_link %}
+                                        <a href="{{ job.apply_link }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-info">
+                                            Search & Apply <i class="bi bi-box-arrow-up-right ms-1"></i>
+                                        </a>
+                                    {% else %}
+                                        <span class="btn btn-sm btn-secondary disabled" aria-disabled="true">Application link unavailable</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+
+                {% if jobs|length > 5 %}
+                    <button class="btn btn-outline-light btn-sm mb-4" onclick="loadMoreJobs({{ forloop.counter }})">
+                        Load More Jobs (+5)
+                    </button>
+                {% endif %}
+            {% endif %}
+        {% endfor %}
+
+        <!-- Fetch Next Page -->
+        <div class="text-center my-4">
+            <button type="button" class="btn btn-success btn-lg" onclick="fetchNextPage()">
+                Fetch Next Page (Page {{ current_page|default:1|add:1 }})
+            </button>
+        </div>
+    {% endif %}
+</div>
+
+<!-- API Key Modal -->
+<div class="modal fade" id="apiKeyModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark text-white border-secondary">
+            <div class="modal-header border-secondary">
+                <h5 class="modal-title">API Settings</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">Gemini API Key</label>
+                    <input type="password" id="modal_gemini_key" class="form-control" placeholder="AIzaSy...">
+                </div>
+            </div>
+            <div class="modal-footer border-secondary">
+                <button type="button" class="btn btn-primary" onclick="saveApiKey()">Save Key</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Saved Jobs Modal -->
+<div class="modal fade" id="savedJobsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content bg-dark text-white border-secondary">
+            <div class="modal-header border-secondary">
+                <h5 class="modal-title">Saved Jobs</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="saved-jobs-body"></div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    document.addEventListener("DOMContentLoaded", () => {
+        syncKeyToInput();
+        renderSavedJobs();
+    });
+
+    function syncKeyToInput() {
+        const geminiKey = localStorage.getItem("gemini_key") || "";
+        const modalGemini = document.getElementById("modal_gemini_key");
+        const hiddenGemini = document.getElementById("hidden_gemini_key");
+
+        if (modalGemini) modalGemini.value = geminiKey;
+        if (hiddenGemini) hiddenGemini.value = geminiKey;
+    }
+
+    function saveApiKey() {
+        const gemini = document.getElementById("modal_gemini_key").value;
+        localStorage.setItem("gemini_key", gemini);
+
+        syncKeyToInput();
+        
+        const modalElement = document.getElementById('apiKeyModal');
+        const modalInstance = bootstrap.Modal.getInstance(modalElement) || new bootstrap.Modal(modalElement);
+        modalInstance.hide();
+    }
+
+    const jobForm = document.getElementById("jobForm");
+    if (jobForm) {
+        jobForm.addEventListener("submit", () => {
+            syncKeyToInput();
+        });
+    }
+
+    function resetPageToOne() {
+        const pageNum = document.getElementById('page_num');
+        if (pageNum) pageNum.value = 1;
+    }
+
+    function getSavedJobs() {
+        return JSON.parse(localStorage.getItem("saved_jobs") || "[]");
+    }
+
+    function toggleSaveJobFromElement(btn) {
+        const jobData = {
+            title: btn.getAttribute("data-title"),
+            company: btn.getAttribute("data-company"),
+            apply_link: btn.getAttribute("data-link")
+        };
+        let saved = getSavedJobs();
+        const index = saved.findIndex(j => j.title === jobData.title && j.company === jobData.company);
+        if (index > -1) {
+            saved.splice(index, 1);
+            btn.querySelector("i").className = "bi bi-bookmark";
+        } else {
+            saved.push(jobData);
+            btn.querySelector("i").className = "bi bi-bookmark-fill";
+        }
+        localStorage.setItem("saved_jobs", JSON.stringify(saved));
+        renderSavedJobs();
+    }
+
+    function renderSavedJobs() {
+        const saved = getSavedJobs();
+        const savedCount = document.getElementById("saved-count");
+        if (savedCount) savedCount.innerText = saved.length;
+        
+        const container = document.getElementById("saved-jobs-body");
+        if (!container) return;
+
+        if (saved.length === 0) {
+            container.innerHTML = "<p class='text-muted'>No saved jobs yet.</p>";
+            return;
+        }
+        container.innerHTML = saved.map((job, idx) => `
+            <div class="card p-3 mb-2 bg-secondary text-white">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="mb-0">${job.title}</h6>
+                        <small class="text-light">${job.company}</small>
+                    </div>
+                    <div>
+                        ${job.apply_link ? `<a href="${job.apply_link}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-info me-2">Search & Apply</a>` : ""}
+                        <button class="btn btn-sm btn-danger" onclick="removeSavedJob(${idx})">Delete</button>
+                    </div>
+                </div>
+            </div>
+        `).join("");
+    }
+
+    function removeSavedJob(index) {
+        let saved = getSavedJobs();
+        saved.splice(index, 1);
+        localStorage.setItem("saved_jobs", JSON.stringify(saved));
+        renderSavedJobs();
+    }
+
+    function loadMoreJobs(tierIndex) {
+        const container = document.getElementById(`tier-container-${tierIndex}`);
+        if (!container) return;
+        const hiddenJobs = container.querySelectorAll('.job-item.d-none');
+        for (let i = 0; i < 5 && i < hiddenJobs.length; i++) {
+            hiddenJobs[i].classList.remove('d-none');
+        }
+    }
+
+    function fetchNextPage() {
+        const pageInput = document.getElementById('page_num');
+        if (pageInput) {
+            pageInput.value = parseInt(pageInput.value || 1) + 1;
+        }
+        if (jobForm) {
+            jobForm.submit();
+        }
+    }
+</script>
+</body>
+</html>
