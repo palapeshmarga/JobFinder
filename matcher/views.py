@@ -70,6 +70,7 @@ def index(request):
             api_key=gemini_key
         )
 
+
         context["categorized_results"] = categorized
 
     return render(request, "/home/pala-peshmarga/Desktop/JobFinder/matcher/templates/matcher/index.html", context)
